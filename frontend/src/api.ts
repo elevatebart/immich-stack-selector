@@ -1,4 +1,4 @@
-export type Kind = 'burst' | 'format' | 'other'
+export type Kind = 'burst' | 'format' | 'loose'
 export type Status = 'pending' | 'reviewed' | 'skipped' | 'gone'
 
 export interface Asset {

@@ -110,7 +110,7 @@ onMounted(load)
     <select v-model="kind" @change="load">
       <option value="burst">burst</option>
       <option value="format">format (RAW+JPG)</option>
-      <option value="other">other</option>
+      <option value="loose">loose (fails time window)</option>
       <option value="">all kinds</option>
     </select>
     <select v-model="status" @change="load">

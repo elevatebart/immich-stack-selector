@@ -23,19 +23,50 @@ class Scorer:
 
             self.aesthetic = AestheticScorer(settings.cache_dir)
 
-    def features(self, im: Immich, asset: dict, cached: dict | None) -> dict:
+    def features(self, im: Immich, asset_id: str, cached: dict | None) -> dict:
         wants_aesthetic = self.aesthetic is not None
         if cached and cached.get("v") == FEATURE_VERSION and (not wants_aesthetic or "aesthetic" in cached):
             return cached
         try:
-            data = im.thumbnail(asset["id"], "preview")
+            data = im.thumbnail(asset_id, "preview")
         except httpx.HTTPStatusError as e:
             # Immich never generated a thumbnail for this asset; it scores as stack average
             return {"v": FEATURE_VERSION, "error": f"thumbnail {e.response.status_code}"}
-        feats = technical_features(data, im.faces(asset["id"]))
+        feats = technical_features(data, im.faces(asset_id))
         if wants_aesthetic:
             feats["aesthetic"] = self.aesthetic.score(data)
         return feats
+
+    def score_assets(self, im: Immich, db: Database, asset_ids: list[str], pool: ThreadPoolExecutor) -> tuple[list[dict], list[float]]:
+        cached = db.cached_features(asset_ids)
+        feats = list(pool.map(lambda a: self.features(im, a, cached.get(a)), asset_ids))
+        db.put_features({a: f for a, f in zip(asset_ids, feats) if f is not cached.get(a)})
+        return feats, self.ranker.score(feats)
+
+
+def ingest_stack(im: Immich, db: Database, scorer: Scorer, st: dict, pool: ThreadPoolExecutor,
+                 apply: bool = False, apply_kinds: set[str] = frozenset()) -> bool:
+    """Score one Immich stack payload into the DB. Returns True when a primary was written to Immich."""
+    assets = [a for a in st["assets"] if not a.get("isTrashed")]
+    if len(assets) < 2:
+        return False
+    kind = classify(assets, settings.time_window_s)
+    feats, scores = scorer.score_assets(im, db, [a["id"] for a in assets], pool)
+    best = assets[max(range(len(assets)), key=scores.__getitem__)]["id"]
+    existing = db.get_stack(st["id"])
+    db.upsert_stack(st["id"], kind, min(a["fileCreatedAt"] for a in assets), st["primaryAssetId"], best)
+    db.replace_assets(
+        st["id"],
+        [{"id": a["id"], "file_name": a["originalFileName"], "created_at": a["fileCreatedAt"], "features": f, "score": s}
+         for a, f, s in zip(assets, feats, scores)],
+    )
+    pending = existing is None or existing["status"] == "pending"
+    if apply and pending and kind in apply_kinds and st["primaryAssetId"] != best:
+        im.set_primary(st["id"], best)
+        db.add_decision(st["id"], "auto", best, st["primaryAssetId"], [])
+        db.set_status(st["id"], "pending", primary=best)
+        return True
+    return False
 
 
 def sync(apply: bool, apply_kinds: set[str], limit: int | None = None) -> None:
@@ -47,33 +78,10 @@ def sync(apply: bool, apply_kinds: set[str], limit: int | None = None) -> None:
     seen, applied = [], 0
     with ThreadPoolExecutor(settings.workers) as pool:
         for i, st in enumerate(stacks, 1):
-            assets = [a for a in st["assets"] if not a.get("isTrashed")]
-            if len(assets) < 2:
+            if len([a for a in st["assets"] if not a.get("isTrashed")]) < 2:
                 continue
             seen.append(st["id"])
-            kind = classify(assets, settings.burst_window_s)
-            cached = db.cached_features([a["id"] for a in assets])
-            feats = list(pool.map(lambda a: scorer.features(im, a, cached.get(a["id"])), assets))
-            scores = scorer.ranker.score(feats)
-            best = assets[max(range(len(assets)), key=scores.__getitem__)]["id"]
-            existing = db.get_stack(st["id"])
-            db.upsert_stack(
-                st["id"], kind, min(a["fileCreatedAt"] for a in assets), st["primaryAssetId"], best
-            )
-            db.replace_assets(
-                st["id"],
-                [
-                    {"id": a["id"], "file_name": a["originalFileName"], "created_at": a["fileCreatedAt"],
-                     "features": f, "score": s}
-                    for a, f, s in zip(assets, feats, scores)
-                ],
-            )
-            pending = existing is None or existing["status"] == "pending"
-            if apply and pending and kind in apply_kinds and st["primaryAssetId"] != best:
-                im.set_primary(st["id"], best)
-                db.add_decision(st["id"], "auto", best, st["primaryAssetId"], [])
-                db.set_status(st["id"], "pending", primary=best)
-                applied += 1
+            applied += ingest_stack(im, db, scorer, st, pool, apply, apply_kinds)
             if i % 100 == 0:
                 print(f"{i}/{len(stacks)} stacks", file=sys.stderr)
     gone = db.mark_gone(seen) if limit is None else 0
@@ -83,7 +91,7 @@ def sync(apply: bool, apply_kinds: set[str], limit: int | None = None) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--apply", action="store_true", help="write suggested primary to Immich for unreviewed stacks")
-    p.add_argument("--kinds", default="burst", help="comma list of stack kinds to apply to (burst,format,other)")
+    p.add_argument("--kinds", default="burst", help="comma list of stack kinds to apply to (burst,format,loose)")
     p.add_argument("--limit", type=int, help="only process the first N stacks (skips the gone check)")
     args = p.parse_args()
     sync(args.apply, set(args.kinds.split(",")), args.limit)

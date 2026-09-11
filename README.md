@@ -10,8 +10,8 @@ or by hand. Only talks to the public Immich API.
 ### How scoring works
 
 1. `python -m app.sync` pulls all stacks, classifies each one:
-   `burst` (same extension, frames within `BURST_WINDOW_S` of each other),
-   `format` (mixed extensions, typically RAW+JPG), `other`.
+   `burst` (same extension, frames within `TIME_WINDOW_S` of each other),
+   `format` (mixed extensions, typically RAW+JPG), `loose`.
 2. For each frame it downloads the `preview` thumbnail and computes
    sharpness (Laplacian variance), face sharpness on Immich's own face boxes,
    clipping and exposure. With `USE_AESTHETIC=1` it adds the LAION aesthetic
@@ -24,6 +24,31 @@ or by hand. Only talks to the public Immich API.
 
 Trashing is refused for `format` stacks so you never lose a RAW. Trash uses
 Immich's soft delete, `undo` restores from trash and resets the primary.
+
+### Stack builder (work in progress)
+
+`python -m app.build` replaces immich-stack's grouping. It lists every image
+via `POST /search/metadata`, chains consecutive shots into candidate groups
+when they are within `TIME_WINDOW_S` and, when both carry GPS, within
+`LOCATION_RADIUS_M`, embeds the previews with CLIP (`EMBED_MODEL`) and keeps
+connected components whose pairwise cosine is at least `SIM_THRESHOLD`.
+RAW+JPG pairs with the same stem are always linked. Each cluster's primary
+is the frame the ranker scores highest.
+
+Proposals are diffed against the stacks Immich has today and stored locally
+as `keep`, `create` (replacing overlapping stacks) or `dissolve`. Nothing is
+written until `--apply`. `--taken-after` / `--taken-before` limit the scan;
+existing stacks outside the window are left alone.
+
+```bash
+.venv/bin/python -m app.build --taken-after 2026-08-01   # dry run, fills the proposals table
+.venv/bin/python -m app.build --taken-after 2026-08-01 --apply
+```
+
+Known gap: clusters are single-linkage, so a chain A~B~C can pull in an A/C
+pair well below the threshold (the dry run reported one 9-frame chain with a
+min pairwise sim of 0.82 against a 0.90 threshold). The `min_sim` column
+exposes this; a UI to review proposals before applying is not built yet.
 
 ### Run
 

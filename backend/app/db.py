@@ -25,6 +25,28 @@ CREATE TABLE IF NOT EXISTS assets (
   score REAL
 );
 CREATE INDEX IF NOT EXISTS assets_stack ON assets(stack_id);
+CREATE TABLE IF NOT EXISTS feature_cache (
+  asset_id TEXT PRIMARY KEY,
+  features TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS embeddings (
+  asset_id TEXT PRIMARY KEY,
+  model TEXT NOT NULL,
+  vec BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS proposals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  asset_ids TEXT NOT NULL,
+  primary_asset_id TEXT,
+  min_sim REAL,
+  existing_stack_id TEXT,
+  replaces TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  created_stack_id TEXT,
+  created_at TEXT NOT NULL,
+  applied_at TEXT
+);
 CREATE TABLE IF NOT EXISTS decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   stack_id TEXT NOT NULL,
@@ -85,8 +107,82 @@ class Database:
         if not asset_ids:
             return {}
         with self.conn() as c:
-            q = f"SELECT id, features FROM assets WHERE id IN ({','.join('?' * len(asset_ids))})"
-            return {r["id"]: json.loads(r["features"]) for r in c.execute(q, asset_ids)}
+            q = f"SELECT asset_id, features FROM feature_cache WHERE asset_id IN ({','.join('?' * len(asset_ids))})"
+            return {r["asset_id"]: json.loads(r["features"]) for r in c.execute(q, asset_ids)}
+
+    def put_features(self, feats: dict[str, dict]) -> None:
+        with self.conn() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO feature_cache(asset_id, features) VALUES(?,?)",
+                [(k, json.dumps(v)) for k, v in feats.items()],
+            )
+
+    def cached_embeddings(self, asset_ids: list[str], model: str) -> dict[str, bytes]:
+        if not asset_ids:
+            return {}
+        with self.conn() as c:
+            q = f"SELECT asset_id, vec FROM embeddings WHERE model=? AND asset_id IN ({','.join('?' * len(asset_ids))})"
+            return {r["asset_id"]: r["vec"] for r in c.execute(q, [model, *asset_ids])}
+
+    def put_embeddings(self, model: str, vecs: dict[str, bytes]) -> None:
+        with self.conn() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO embeddings(asset_id, model, vec) VALUES(?,?,?)",
+                [(k, model, v) for k, v in vecs.items()],
+            )
+
+    # -- proposals --------------------------------------------------------
+
+    def reset_proposals(self) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM proposals WHERE status='proposed'")
+
+    def add_proposals(self, rows: list[dict]) -> None:
+        with self.conn() as c:
+            c.executemany(
+                """INSERT INTO proposals(action, asset_ids, primary_asset_id, min_sim, existing_stack_id, replaces, created_at)
+                   VALUES(?,?,?,?,?,?,?)""",
+                [(r["action"], json.dumps(r["asset_ids"]), r.get("primary_asset_id"), r.get("min_sim"),
+                  r.get("existing_stack_id"), json.dumps(r.get("replaces", [])), now()) for r in rows],
+            )
+
+    def _proposal(self, row) -> dict:
+        return {**dict(row), "asset_ids": json.loads(row["asset_ids"]), "replaces": json.loads(row["replaces"])}
+
+    def list_proposals(self, status: str | None, action: str | None, limit: int, offset: int) -> list[dict]:
+        q, params = "SELECT * FROM proposals WHERE 1=1", []
+        if status:
+            q += " AND status=?"
+            params.append(status)
+        if action:
+            q += " AND action=?"
+            params.append(action)
+        q += " ORDER BY min_sim ASC, id LIMIT ? OFFSET ?"
+        params += [limit, offset]
+        with self.conn() as c:
+            return [self._proposal(r) for r in c.execute(q, params).fetchall()]
+
+    def get_proposal(self, pid: int) -> dict | None:
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM proposals WHERE id=?", (pid,)).fetchone()
+            return self._proposal(row) if row else None
+
+    def proposal_ids(self, status: str = "proposed") -> list[int]:
+        with self.conn() as c:
+            return [r[0] for r in c.execute("SELECT id FROM proposals WHERE status=? ORDER BY id", (status,))]
+
+    def set_proposal(self, pid: int, status: str, created_stack_id: str | None = None) -> None:
+        with self.conn() as c:
+            c.execute("UPDATE proposals SET status=?, applied_at=?, created_stack_id=COALESCE(?, created_stack_id) WHERE id=?",
+                      (status, now(), created_stack_id, pid))
+
+    def proposal_stats(self) -> list[dict]:
+        with self.conn() as c:
+            return [dict(r) for r in c.execute("SELECT action, status, COUNT(*) n FROM proposals GROUP BY action, status")]
+
+    def mark_stack_gone(self, stack_id: str) -> None:
+        with self.conn() as c:
+            c.execute("UPDATE stacks SET status='gone' WHERE id=?", (stack_id,))
 
     def mark_gone(self, seen_ids: list[str]) -> int:
         with self.conn() as c:

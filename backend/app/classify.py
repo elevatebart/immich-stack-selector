@@ -10,10 +10,10 @@ def _ts(asset: dict) -> datetime:
 
 
 def classify(assets: list[dict], window_s: float) -> str:
-    """burst: same extension, tight timing. format: mixed extensions (RAW+JPG). other: rest."""
+    """burst: same extension, tight timing. format: mixed extensions (RAW+JPG). loose: rest."""
     exts = {Path(a["originalFileName"]).suffix.lower() for a in assets}
     if len(exts) > 1 or exts & RAW_EXTS:
         return "format"
     times = sorted(_ts(a) for a in assets)
     span = (times[-1] - times[0]).total_seconds()
-    return "burst" if span <= window_s * (len(assets) - 1) else "other"
+    return "burst" if span <= window_s * (len(assets) - 1) else "loose"

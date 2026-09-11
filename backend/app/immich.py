@@ -24,6 +24,31 @@ class Immich:
         r.raise_for_status()
         return r.json()
 
+    def iter_assets(self, taken_after: str | None = None, taken_before: str | None = None):
+        """All of the key owner's images, oldest first, with EXIF (GPS, capture time)."""
+        body = {"type": "IMAGE", "withExif": True, "size": 1000, "order": "asc", "page": 1}
+        # Immich validates these as full datetimes, so pad bare dates
+        if taken_after:
+            body["takenAfter"] = taken_after if "T" in taken_after else f"{taken_after}T00:00:00.000Z"
+        if taken_before:
+            body["takenBefore"] = taken_before if "T" in taken_before else f"{taken_before}T00:00:00.000Z"
+        while body["page"]:
+            r = self.c.post("/search/metadata", json=body)
+            r.raise_for_status()
+            page = r.json()["assets"]
+            yield from page["items"]
+            body["page"] = page.get("nextPage")
+
+    def create_stack(self, asset_ids: list[str]) -> dict:
+        r = self.c.post("/stacks", json={"assetIds": asset_ids})
+        r.raise_for_status()
+        return r.json()
+
+    def delete_stack(self, stack_id: str) -> None:
+        r = self.c.delete(f"/stacks/{stack_id}")
+        if r.status_code != 404:
+            r.raise_for_status()
+
     def set_primary(self, stack_id: str, asset_id: str) -> None:
         self.c.put(f"/stacks/{stack_id}", json={"primaryAssetId": asset_id}).raise_for_status()
 
