@@ -1,0 +1,63 @@
+# immich-stack-selector
+
+Scores every frame of your Immich stacks, sets the best one as the stack
+primary, and gives you a keyboard-driven UI to confirm the pick and trash
+the rest. Every review you make becomes a training pair for the ranker.
+
+Works on top of stacks created by [immich-stack](https://github.com/majorfi/immich-stack)
+or by hand. Only talks to the public Immich API.
+
+### How scoring works
+
+1. `python -m app.sync` pulls all stacks, classifies each one:
+   `burst` (same extension, frames within `BURST_WINDOW_S` of each other),
+   `format` (mixed extensions, typically RAW+JPG), `other`.
+2. For each frame it downloads the `preview` thumbnail and computes
+   sharpness (Laplacian variance), face sharpness on Immich's own face boxes,
+   clipping and exposure. With `USE_AESTHETIC=1` it adds the LAION aesthetic
+   score (CLIP ViT-L/14). Features are cached in SQLite.
+3. Features are z-scored within the stack and combined with a weight vector.
+   Default weights are hand-set. `python -m app.train` refits them by
+   logistic regression on your review decisions (chosen vs rejected sibling).
+4. `--apply` writes the suggested primary to Immich for unreviewed burst
+   stacks. Without it, suggestions only show up in the UI.
+
+Trashing is refused for `format` stacks so you never lose a RAW. Trash uses
+Immich's soft delete, `undo` restores from trash and resets the primary.
+
+### Run
+
+```bash
+cp .env.example .env   # set IMMICH_URL and IMMICH_API_KEY
+cd backend && python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/python -m app.sync            # score, no writes to Immich
+.venv/bin/python -m app.sync --apply    # also set primaries on burst stacks
+.venv/bin/uvicorn app.main:app --reload --port 8000
+cd ../frontend && npm install && npm run dev   # http://localhost:5173
+```
+
+Production: `npm run build` in `frontend/`, the FastAPI app serves `dist/` at `/`.
+
+Optional aesthetic model: `.venv/bin/pip install -e '.[aesthetic]'` and `USE_AESTHETIC=1`.
+First run downloads CLIP ViT-L/14 (~1.7 GB) and the predictor head.
+
+### Review UI
+
+| key | action |
+| --- | --- |
+| `1`..`9`, arrows | select a frame |
+| `enter` | set selected frame as primary |
+| `t` | set primary and trash the other frames (burst stacks only) |
+| `s` | skip |
+| `u` | undo last decision (restores trashed frames) |
+
+### Caveats
+
+- immich-stack in `RUN_MODE=cron` with `REPLACE_STACKS` may rebuild stacks
+  and re-apply its own parent rule, overwriting your primary. Run it once,
+  or chain `python -m app.sync --apply` after it.
+- `sync` marks stacks that disappeared from Immich as `gone` rather than
+  deleting local rows, so decisions stay available for training.
+- The ranker needs on the order of 100 human decisions before it beats the
+  hand-set weights. Retrain with `python -m app.train`, then rescore with
+  `python -m app.sync`.
