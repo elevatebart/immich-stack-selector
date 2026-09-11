@@ -4,6 +4,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import httpx
+
 from .classify import classify
 from .config import settings
 from .db import Database
@@ -25,19 +27,23 @@ class Scorer:
         wants_aesthetic = self.aesthetic is not None
         if cached and cached.get("v") == FEATURE_VERSION and (not wants_aesthetic or "aesthetic" in cached):
             return cached
-        data = im.thumbnail(asset["id"], "preview")
+        try:
+            data = im.thumbnail(asset["id"], "preview")
+        except httpx.HTTPStatusError as e:
+            # Immich never generated a thumbnail for this asset; it scores as stack average
+            return {"v": FEATURE_VERSION, "error": f"thumbnail {e.response.status_code}"}
         feats = technical_features(data, im.faces(asset["id"]))
         if wants_aesthetic:
             feats["aesthetic"] = self.aesthetic.score(data)
         return feats
 
 
-def sync(apply: bool, apply_kinds: set[str]) -> None:
+def sync(apply: bool, apply_kinds: set[str], limit: int | None = None) -> None:
     im = Immich(settings.immich_url, settings.api_key, settings.cache_dir)
     db = Database(settings.db_path)
     scorer = Scorer()
     print(f"ranker weights: {scorer.ranker.source}")
-    stacks = im.stacks()
+    stacks = im.stacks()[:limit]
     seen, applied = [], 0
     with ThreadPoolExecutor(settings.workers) as pool:
         for i, st in enumerate(stacks, 1):
@@ -68,8 +74,9 @@ def sync(apply: bool, apply_kinds: set[str]) -> None:
                 db.add_decision(st["id"], "auto", best, st["primaryAssetId"], [])
                 db.set_status(st["id"], "pending", primary=best)
                 applied += 1
-            print(f"\r{i}/{len(stacks)} stacks", end="", file=sys.stderr)
-    gone = db.mark_gone(seen)
+            if i % 100 == 0:
+                print(f"{i}/{len(stacks)} stacks", file=sys.stderr)
+    gone = db.mark_gone(seen) if limit is None else 0
     print(f"\nsynced {len(seen)} stacks, applied {applied} primaries, {gone} stacks gone")
 
 
@@ -77,5 +84,6 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--apply", action="store_true", help="write suggested primary to Immich for unreviewed stacks")
     p.add_argument("--kinds", default="burst", help="comma list of stack kinds to apply to (burst,format,other)")
+    p.add_argument("--limit", type=int, help="only process the first N stacks (skips the gone check)")
     args = p.parse_args()
-    sync(args.apply, set(args.kinds.split(",")))
+    sync(args.apply, set(args.kinds.split(",")), args.limit)

@@ -50,14 +50,14 @@ const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '')
 </template>
 
 <style scoped>
-.review { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; }
-.preview { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.preview img { max-height: 62vh; max-width: 100%; object-fit: contain; border-radius: 8px; background: #000; }
+.review { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; }
+.preview { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.preview img { flex: 1; min-height: 0; max-width: 100%; object-fit: contain; border-radius: 8px; background: #000; }
 .meta { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .muted { color: var(--muted); }
 .kind { border: 1px solid var(--border); border-radius: 999px; padding: 0 10px; font-size: 12px; }
 .kind[data-kind='format'] { border-color: var(--warn); color: var(--warn); }
-.strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 8px; }
+.strip { flex: 0 0 auto; display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 8px; }
 .card { position: relative; flex: 0 0 auto; padding: 0; border: 2px solid var(--border); border-radius: 8px; overflow: hidden; background: #000; }
 .card.active { border-color: var(--accent); }
 .card img { display: block; height: 140px; width: auto; }

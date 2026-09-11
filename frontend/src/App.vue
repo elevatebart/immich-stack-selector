@@ -142,8 +142,9 @@ onMounted(load)
 </template>
 
 <style scoped>
-.bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
-.actions { border-top: 1px solid var(--border); border-bottom: 0; position: sticky; bottom: 0; }
+.bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto; }
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.actions { border-top: 1px solid var(--border); border-bottom: 0; }
 .grow { flex: 1; }
 .muted { color: var(--muted); }
 .error { color: var(--warn); padding: 8px 16px; margin: 0; }

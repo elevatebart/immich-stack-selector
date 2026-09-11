@@ -5,6 +5,11 @@ from pathlib import Path
 import numpy as np
 
 FEATURES = ["sharpness", "face_sharpness", "face_area", "shadow_clip", "highlight_clip", "lum_dev", "aesthetic"]
+# Below these spreads frames are considered equal, so noise is not inflated into confidence
+STD_FLOOR = {
+    "sharpness": 0.15, "face_sharpness": 0.15, "face_area": 0.02, "shadow_clip": 0.01,
+    "highlight_clip": 0.01, "lum_dev": 0.02, "aesthetic": 0.2,
+}
 DEFAULT_WEIGHTS = {
     "sharpness": 1.0, "face_sharpness": 1.5, "face_area": 0.3, "shadow_clip": -0.3,
     "highlight_clip": -0.5, "lum_dev": 0.3, "aesthetic": 1.0,
@@ -19,8 +24,8 @@ def stack_matrix(features: list[dict]) -> np.ndarray:
         mean = np.nanmean(m, axis=0)
     mean = np.where(np.isnan(mean), 0.0, mean)
     m = np.where(np.isnan(m), mean, m)
-    std = m.std(axis=0)
-    return (m - mean) / np.where(std < 1e-9, 1.0, std)
+    floor = np.array([STD_FLOOR[k] for k in FEATURES])
+    return (m - mean) / np.maximum(m.std(axis=0), floor)
 
 
 class Ranker:
