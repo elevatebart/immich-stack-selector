@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
+import httpx
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -12,6 +14,16 @@ from . import sync as sync_mod
 app = FastAPI(title="immich-stack-selector")
 db = Database(settings.db_path)
 im = Immich(settings.immich_url, settings.api_key, settings.cache_dir)
+
+
+@app.exception_handler(httpx.HTTPStatusError)
+def immich_error(_: Request, e: httpx.HTTPStatusError):
+    # surface Immich's own message (usually a missing API key permission) instead of a 500
+    try:
+        detail = e.response.json().get("message", e.response.text)
+    except ValueError:
+        detail = e.response.text
+    return JSONResponse({"detail": f"immich {e.response.status_code}: {detail}"}, status_code=502)
 
 
 class DecisionIn(BaseModel):
