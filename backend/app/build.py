@@ -140,12 +140,18 @@ def apply_ids(ids: list[int]) -> int:
     im = Immich(settings.immich_url, settings.api_key, settings.cache_dir)
     db = Database(settings.db_path)
     scorer = Scorer()
+    failed = 0
     with ThreadPoolExecutor(settings.workers) as pool:
         for n, pid in enumerate(ids, 1):
-            apply_proposal(im, db, scorer, pid, pool)
+            try:
+                apply_proposal(im, db, scorer, pid, pool)
+            except Exception as e:  # one bad stack must not stop the batch
+                failed += 1
+                db.set_proposal(pid, "failed")
+                print(f"proposal {pid} failed: {e}", file=sys.stderr)
             if n % 100 == 0:
-                print(f"{n}/{len(ids)} applied", file=sys.stderr)
-    return len(ids)
+                print(f"{n}/{len(ids)} applied, {failed} failed", file=sys.stderr)
+    return len(ids) - failed
 
 
 if __name__ == "__main__":
