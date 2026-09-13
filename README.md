@@ -38,37 +38,47 @@ are not stacked yet.
 
 ## Deploy on a NAS
 
+Nothing needs to run permanently. The image is a CLI with an optional web
+server, so a scheduled task spins a container up, stacks the new photos and
+exits. The review page starts only when you want to use it.
+
 ```bash
-mkdir immich-stack-selector && cd immich-stack-selector
+mkdir -p /volume1/docker/immich-stack-selector && cd /volume1/docker/immich-stack-selector
 curl -LO https://raw.githubusercontent.com/elevatebart/immich-stack-selector/main/docker-compose.yml
 curl -Lo .env https://raw.githubusercontent.com/elevatebart/immich-stack-selector/main/.env.example
 # edit .env: IMMICH_URL, IMMICH_API_KEY
-docker compose up -d
+docker compose run --rm job build --periodic 14   # first run downloads CLIP into ./data
 ```
 
-Open `http://nas:8000`. The `data/` folder next to the compose file keeps the
-SQLite database, the thumbnail cache and the CLIP weights, so the first
-build downloads the model once.
+The `data/` folder next to the compose file keeps the SQLite database, the
+thumbnail cache and the model weights between runs.
+
+Scheduled task (Synology Task Scheduler, user-defined script as root, or
+cron), nightly for example:
+
+```bash
+cd /volume1/docker/immich-stack-selector && docker compose run --rm job build --periodic 14 && docker compose run --rm job sync
+```
+
+`build --periodic 14` scans photos taken in the last 14 days and creates
+stacks for the ones not stacked yet, best frame on top. It never dissolves
+or replaces a stack. `sync` re-scores existing stacks so the review page has
+fresh suggestions.
+
+Review page, when you have time to go through stacks:
+
+```bash
+docker compose up -d ui      # http://nas:8000
+docker compose stop ui
+```
+
+If you would rather keep the page up all the time, the `ui` service also
+accepts timers: `SYNC_EVERY_MIN` re-scores and `BUILD_EVERY_MIN` runs the
+periodic build over `BUILD_WINDOW_DAYS`; both default to `0`.
 
 The API key needs these permissions: `stack.read`, `stack.create`,
 `stack.update`, `stack.delete`, `asset.read`, `asset.view`, `face.read`,
 and `asset.delete` for the trash and restore actions.
-
-Timers, all in minutes and all disabled with `0`:
-
-| variable | default | effect |
-| --- | --- | --- |
-| `SYNC_EVERY_MIN` | 360 | re-score every stack, refresh suggestions |
-| `BUILD_EVERY_MIN` | 60 | stack unstacked photos taken in the last `BUILD_WINDOW_DAYS` |
-| `BUILD_WINDOW_DAYS` | 14 | how far back the periodic build looks |
-
-Prefer an explicit schedule (Synology Task Scheduler, cron)? Set the two
-`*_EVERY_MIN` variables to `0` and run these as root on the host:
-
-```bash
-docker exec -w /app/backend immich-stack-selector python -m app.build --periodic 14
-docker exec -w /app/backend immich-stack-selector python -m app.sync
-```
 
 Images are published to `ghcr.io/elevatebart/immich-stack-selector` for
 `linux/amd64` and `linux/arm64` on every push to `main`. Uncomment
