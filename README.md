@@ -62,6 +62,14 @@ Timers, all in minutes and all disabled with `0`:
 | `BUILD_EVERY_MIN` | 60 | stack unstacked photos taken in the last `BUILD_WINDOW_DAYS` |
 | `BUILD_WINDOW_DAYS` | 14 | how far back the periodic build looks |
 
+Prefer an explicit schedule (Synology Task Scheduler, cron)? Set the two
+`*_EVERY_MIN` variables to `0` and run these as root on the host:
+
+```bash
+docker exec -w /app/backend immich-stack-selector python -m app.build --periodic 14
+docker exec -w /app/backend immich-stack-selector python -m app.sync
+```
+
 Images are published to `ghcr.io/elevatebart/immich-stack-selector` for
 `linux/amd64` and `linux/arm64` on every push to `main`. Uncomment
 `build: .` in the compose file to build on the NAS instead.

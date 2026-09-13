@@ -170,7 +170,12 @@ if __name__ == "__main__":
     p.add_argument("--apply", action="store_true", help="apply every proposal still in 'proposed' state")
     p.add_argument("--taken-after", help="ISO date, limit the scan (existing stacks outside are left alone)")
     p.add_argument("--taken-before", help="ISO date")
+    p.add_argument("--periodic", type=int, metavar="DAYS",
+                   help="scan the last DAYS days and create stacks for unstacked photos only (cron friendly)")
     args = p.parse_args()
+    if args.periodic:
+        print(f"created {periodic(args.periodic)} stacks")
+        raise SystemExit
     propose(args.taken_after, args.taken_before)
     if args.apply:
         print(f"applied {apply_all()} proposals")
