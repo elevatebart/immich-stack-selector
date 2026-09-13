@@ -15,5 +15,6 @@ def classify(assets: list[dict], window_s: float) -> str:
     if len(exts) > 1 or exts & RAW_EXTS:
         return "format"
     times = sorted(_ts(a) for a in assets)
-    span = (times[-1] - times[0]).total_seconds()
-    return "burst" if span <= window_s * (len(assets) - 1) else "loose"
+    gap = max((b - a).total_seconds() for a, b in zip(times, times[1:]))
+    # a chain may skip a dissimilar middle frame, so allow two windows between kept frames
+    return "burst" if gap <= 2 * window_s else "loose"
