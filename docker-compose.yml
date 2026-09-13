@@ -1,0 +1,20 @@
+services:
+  stack-selector:
+    image: ghcr.io/elevatebart/immich-stack-selector:latest
+    # build: .   # uncomment to build on the NAS instead of pulling
+    container_name: immich-stack-selector
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      IMMICH_URL: ${IMMICH_URL}
+      IMMICH_API_KEY: ${IMMICH_API_KEY}
+      TIME_WINDOW_S: ${TIME_WINDOW_S:-120}
+      LOCATION_RADIUS_M: ${LOCATION_RADIUS_M:-30}
+      SIM_THRESHOLD: ${SIM_THRESHOLD:-0.85}
+      CLUSTER_MODE: ${CLUSTER_MODE:-chain}
+      # re-score stacks on this cadence; 0 disables (use the sync button or the API instead)
+      SYNC_EVERY_MIN: ${SYNC_EVERY_MIN:-360}
+      WORKERS: 4
+    volumes:
+      - ./data:/data

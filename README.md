@@ -86,3 +86,22 @@ First run downloads CLIP ViT-L/14 (~1.7 GB) and the predictor head.
 - The ranker needs on the order of 100 human decisions before it beats the
   hand-set weights. Retrain with `python -m app.train`, then rescore with
   `python -m app.sync`.
+
+### Docker (NAS deployment)
+
+The image bundles the UI, the API and CPU-only torch. Model weights, the
+SQLite database and the thumbnail cache live on the `/data` volume, so the
+first `build` downloads CLIP once and keeps it.
+
+```bash
+cp .env.example .env            # fill IMMICH_URL and IMMICH_API_KEY
+docker compose up -d            # pulls ghcr.io/elevatebart/immich-stack-selector
+docker compose exec stack-selector python -m app.build --app-dir backend   # propose stacks
+```
+
+`SYNC_EVERY_MIN` re-scores stacks on a timer (default six hours in the
+compose file). The builder and the bulk apply stay manual: run them from
+the proposals tab or with `docker compose exec stack-selector python -c
+"from app.build import propose; propose(None, None)"`. The GitHub workflow
+publishes `linux/amd64` and `linux/arm64` images on every push to `main`;
+to build on the NAS itself, uncomment `build: .` in the compose file.

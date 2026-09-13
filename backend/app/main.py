@@ -171,6 +171,25 @@ def run_build(tasks: BackgroundTasks, taken_after: str | None = None, taken_befo
     return {"started": True}
 
 
+@app.on_event("startup")
+def periodic_sync():
+    """Re-score stacks every SYNC_EVERY_MIN minutes when deployed as a long-running container."""
+    if settings.sync_every_min <= 0:
+        return
+    import threading
+    import time
+
+    def loop():
+        while True:
+            time.sleep(settings.sync_every_min * 60)
+            try:
+                sync_mod.sync(False, set())
+            except Exception as e:  # keep the server alive, log and retry next tick
+                print(f"periodic sync failed: {e}")
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if dist.exists():
     app.mount("/", StaticFiles(directory=dist, html=True), name="ui")

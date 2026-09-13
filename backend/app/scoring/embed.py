@@ -6,14 +6,16 @@ import numpy as np
 class Embedder:
     """open_clip image embeddings, L2-normalised. Model spec is "arch/pretrained"."""
 
-    def __init__(self, spec: str, batch_size: int = 32):
+    def __init__(self, spec: str, batch_size: int = 32, cache_dir: str | None = None):
         import open_clip
         import torch
 
         arch, pretrained = spec.split("/", 1)
         self.torch = torch
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
-        self.model, _, self.preprocess = open_clip.create_model_and_transforms(arch, pretrained=pretrained, device=self.device)
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            arch, pretrained=pretrained, device=self.device, cache_dir=cache_dir
+        )
         self.model.eval()
         self.batch_size = batch_size
         self.spec = spec
