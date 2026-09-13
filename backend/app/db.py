@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   status TEXT NOT NULL DEFAULT 'proposed',
   created_stack_id TEXT,
   created_at TEXT NOT NULL,
-  applied_at TEXT
+  applied_at TEXT,
+  reason TEXT
 );
 CREATE TABLE IF NOT EXISTS decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +71,8 @@ class Database:
         self._lock = threading.Lock()
         with self.conn() as c:
             c.executescript(SCHEMA)
+            if "reason" not in {r[1] for r in c.execute("PRAGMA table_info(proposals)")}:
+                c.execute("ALTER TABLE proposals ADD COLUMN reason TEXT")
 
     @contextmanager
     def conn(self):
@@ -140,10 +143,10 @@ class Database:
     def add_proposals(self, rows: list[dict]) -> None:
         with self.conn() as c:
             c.executemany(
-                """INSERT INTO proposals(action, asset_ids, primary_asset_id, min_sim, existing_stack_id, replaces, created_at)
-                   VALUES(?,?,?,?,?,?,?)""",
+                """INSERT INTO proposals(action, asset_ids, primary_asset_id, min_sim, existing_stack_id, replaces, reason, created_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
                 [(r["action"], json.dumps(r["asset_ids"]), r.get("primary_asset_id"), r.get("min_sim"),
-                  r.get("existing_stack_id"), json.dumps(r.get("replaces", [])), now()) for r in rows],
+                  r.get("existing_stack_id"), json.dumps(r.get("replaces", [])), r.get("reason"), now()) for r in rows],
             )
 
     def _proposal(self, row) -> dict:

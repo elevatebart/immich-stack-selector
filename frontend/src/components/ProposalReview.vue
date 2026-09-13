@@ -54,7 +54,7 @@ async function rebuild() {
 
 function label(p: Proposal) {
   if (p.action === 'keep') return 'keep existing stack'
-  if (p.action === 'dissolve') return 'dissolve stack (fails time, GPS or similarity)'
+  if (p.action === 'dissolve') return `dissolve stack: ${p.reason ?? 'fails time, GPS or similarity'}`
   return p.replaces.length ? `create, replacing ${p.replaces.length} stack${p.replaces.length > 1 ? 's' : ''}` : 'create new stack'
 }
 

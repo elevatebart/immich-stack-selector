@@ -33,6 +33,7 @@ export interface Proposal {
   existing_stack_id: string | null
   replaces: string[]
   created_stack_id: string | null
+  reason: string | null
   assets: { id: string; file_name: string | null; features: Record<string, number | null> }[]
 }
 

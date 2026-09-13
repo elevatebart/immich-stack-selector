@@ -8,7 +8,7 @@ import numpy as np
 
 from .config import settings
 from .db import Database
-from .group import CLUSTERERS, candidate_groups, format_pairs, upload_order
+from .group import CLUSTERERS, candidate_groups, format_pairs, gps, haversine_m, ts, upload_order
 from .immich import Immich
 from .scoring.embed import Embedder
 from .sync import Scorer, ingest_stack
@@ -33,6 +33,25 @@ def embed_group(im: Immich, db: Database, embedder: Embedder, ids: list[str], po
     if len(cached) < 2:
         return None
     return np.vstack([np.frombuffer(cached[i], dtype=np.float32) if i in cached else np.zeros(512, np.float32) for i in ids])
+
+
+def dissolve_reason(db: Database, model: str, assets: list[dict]) -> str:
+    """Why an existing stack fails: widest time gap, GPS spread, or lowest similarity."""
+    times = sorted(ts(a) for a in assets)
+    span = max((b - a).total_seconds() for a, b in zip(times, times[1:]))
+    if span > settings.time_window_s:
+        return f"{span / 60:.0f} min between consecutive frames" if span >= 120 else f"{span:.0f} s between consecutive frames"
+    pts = [p for p in (gps(a) for a in assets) if p]
+    if len(pts) > 1:
+        spread = max(haversine_m(p, q) for p in pts for q in pts)
+        if spread > settings.location_radius_m:
+            return f"{spread:.0f} m GPS spread"
+    ids = [a["id"] for a in assets]
+    vecs = db.cached_embeddings(ids, model)
+    if len(vecs) == len(ids):
+        m = np.vstack([np.frombuffer(vecs[i], dtype=np.float32) for i in ids])
+        return f"similarity {float((m @ m.T).min()):.3f} below threshold"
+    return "frames not similar enough"
 
 
 def propose(taken_after: str | None, taken_before: str | None) -> dict:
@@ -82,7 +101,8 @@ def propose(taken_after: str | None, taken_before: str | None) -> dict:
         if st["id"] in matched or not any(a["id"] in in_scope for a in st["assets"]):
             continue
         rows.append({"action": "dissolve", "asset_ids": [a["id"] for a in st["assets"]],
-                     "primary_asset_id": st["primaryAssetId"], "existing_stack_id": st["id"]})
+                     "primary_asset_id": st["primaryAssetId"], "existing_stack_id": st["id"],
+                     "reason": dissolve_reason(db, embedder.spec, st["assets"])})
     db.reset_proposals()
     db.add_proposals(rows)
     counts = {k: sum(r["action"] == k for r in rows) for k in ("keep", "create", "dissolve")}
