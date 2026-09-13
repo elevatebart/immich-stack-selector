@@ -61,32 +61,57 @@ def format_pairs(assets: list[dict]) -> list[tuple[int, int]]:
     return pairs
 
 
-def similarity_clusters(embs: np.ndarray, threshold: float, forced: list[tuple[int, int]]) -> list[tuple[list[int], float]]:
-    """Connected components of pairwise cosine >= threshold. Returns (indices, min pairwise sim) for size >= 2."""
-    n = len(embs)
+def upload_order(assets: list[dict]) -> list[int]:
+    """Indices sorted by Immich upload time, so frames from one device stay consecutive."""
+    return sorted(range(len(assets)), key=lambda i: assets[i].get("createdAt") or "")
+
+
+def _sim_matrix(embs: np.ndarray, forced: list[tuple[int, int]]) -> np.ndarray:
     sim = embs @ embs.T
-    adj = sim >= threshold
     for i, j in forced:
-        adj[i, j] = adj[j, i] = True
-    parent = list(range(n))
+        sim[i, j] = sim[j, i] = 1.0
+    return sim
 
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if adj[i, j]:
-                parent[find(i)] = find(j)
-    comps: dict[int, list[int]] = {}
-    for i in range(n):
-        comps.setdefault(find(i), []).append(i)
-    out = []
-    for idx in comps.values():
-        if len(idx) < 2:
-            continue
-        sub = sim[np.ix_(idx, idx)]
-        out.append((idx, float(sub.min())))
-    return out
+def _finish(sim: np.ndarray, clusters: list[list[int]], forced: list[tuple[int, int]]) -> list[tuple[list[int], float]]:
+    # RAW+JPG pairs must end up together even when the chain walk separated them
+    where = {i: n for n, cl in enumerate(clusters) for i in cl}
+    for i, j in forced:
+        a, b = where[i], where[j]
+        if a != b:
+            clusters[a] += clusters[b]
+            for k in clusters[b]:
+                where[k] = a
+            clusters[b] = []
+    return [(sorted(cl), float(sim[np.ix_(cl, cl)].min())) for cl in clusters if len(cl) >= 2]
+
+
+def chain_clusters(embs: np.ndarray, threshold: float, forced: list[tuple[int, int]], order: list[int]) -> list[tuple[list[int], float]]:
+    """Walk frames in `order`; a frame joins the most recent chain whose last frame it matches."""
+    sim = _sim_matrix(embs, forced)
+    chains: list[list[int]] = []
+    for i in order:
+        for cl in reversed(chains):
+            if sim[i, cl[-1]] >= threshold:
+                cl.append(i)
+                break
+        else:
+            chains.append([i])
+    return _finish(sim, chains, forced)
+
+
+def complete_clusters(embs: np.ndarray, threshold: float, forced: list[tuple[int, int]], order: list[int]) -> list[tuple[list[int], float]]:
+    """Greedy complete-linkage: a frame joins a cluster only if it matches every member."""
+    sim = _sim_matrix(embs, forced)
+    clusters: list[list[int]] = []
+    for i in order:
+        for cl in clusters:
+            if all(sim[i, j] >= threshold for j in cl):
+                cl.append(i)
+                break
+        else:
+            clusters.append([i])
+    return _finish(sim, clusters, forced)
+
+
+CLUSTERERS = {"chain": chain_clusters, "complete": complete_clusters}

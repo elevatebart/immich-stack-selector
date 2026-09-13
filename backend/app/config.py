@@ -22,6 +22,7 @@ class Settings:
     time_window_s: float = float(os.environ.get("TIME_WINDOW_S", "120"))
     location_radius_m: float = float(os.environ.get("LOCATION_RADIUS_M", "10"))
     sim_threshold: float = float(os.environ.get("SIM_THRESHOLD", "0.90"))
+    cluster_mode: str = os.environ.get("CLUSTER_MODE", "chain")
     embed_model: str = os.environ.get("EMBED_MODEL", "ViT-B-32/openai")
     use_aesthetic: bool = os.environ.get("USE_AESTHETIC", "0") == "1"
     workers: int = int(os.environ.get("WORKERS", "8"))

@@ -167,9 +167,20 @@ class Database:
             row = c.execute("SELECT * FROM proposals WHERE id=?", (pid,)).fetchone()
             return self._proposal(row) if row else None
 
-    def proposal_ids(self, status: str = "proposed") -> list[int]:
+    def proposal_ids(self, status: str = "proposed", action: str | None = None) -> list[int]:
+        q, params = "SELECT id FROM proposals WHERE status=?", [status]
+        if action:
+            q += " AND action=?"
+            params.append(action)
         with self.conn() as c:
-            return [r[0] for r in c.execute("SELECT id FROM proposals WHERE status=? ORDER BY id", (status,))]
+            return [r[0] for r in c.execute(q + " ORDER BY id", params)]
+
+    def asset_names(self, asset_ids: list[str]) -> dict[str, str]:
+        if not asset_ids:
+            return {}
+        with self.conn() as c:
+            q = f"SELECT id, file_name FROM assets WHERE id IN ({','.join('?' * len(asset_ids))})"
+            return {r["id"]: r["file_name"] for r in c.execute(q, asset_ids)}
 
     def set_proposal(self, pid: int, status: str, created_stack_id: str | None = None) -> None:
         with self.conn() as c:

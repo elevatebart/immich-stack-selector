@@ -9,7 +9,9 @@ from pydantic import BaseModel
 from .config import settings
 from .db import Database
 from .immich import Immich
+from . import build as build_mod
 from . import sync as sync_mod
+from concurrent.futures import ThreadPoolExecutor
 
 app = FastAPI(title="immich-stack-selector")
 db = Database(settings.db_path)
@@ -104,6 +106,68 @@ def thumb(asset_id: str, size: str = "thumbnail"):
 @app.post("/api/sync")
 def run_sync(tasks: BackgroundTasks, apply: bool = False):
     tasks.add_task(sync_mod.sync, apply, {"burst"})
+    return {"started": True}
+
+
+# -- proposals (stack builder output) ---------------------------------------
+
+_scorer: sync_mod.Scorer | None = None
+
+
+def scorer() -> sync_mod.Scorer:
+    global _scorer
+    if _scorer is None:
+        _scorer = sync_mod.Scorer()
+    return _scorer
+
+
+def hydrate(pr: dict) -> dict:
+    """Attach file names and scores for the proposal's assets, from the local cache where possible."""
+    feats = db.cached_features(pr["asset_ids"])
+    names = db.asset_names(pr["asset_ids"])
+    pr["assets"] = [{"id": a, "file_name": names.get(a), "features": feats.get(a, {})} for a in pr["asset_ids"]]
+    return pr
+
+
+@app.get("/api/proposals")
+def list_proposals(status: str | None = "proposed", action: str | None = None, limit: int = 50, offset: int = 0):
+    return [hydrate(p) for p in db.list_proposals(status or None, action or None, limit, offset)]
+
+
+@app.get("/api/proposals/stats")
+def proposal_stats():
+    return db.proposal_stats()
+
+
+@app.post("/api/proposals/{pid}/apply")
+def apply_proposal(pid: int):
+    if not db.get_proposal(pid):
+        raise HTTPException(404)
+    with ThreadPoolExecutor(settings.workers) as pool:
+        return hydrate(build_mod.apply_proposal(im, db, scorer(), pid, pool))
+
+
+@app.post("/api/proposals/{pid}/reject")
+def reject_proposal(pid: int):
+    pr = db.get_proposal(pid)
+    if not pr:
+        raise HTTPException(404)
+    if pr["status"] != "proposed":
+        raise HTTPException(400, f"proposal is {pr['status']}")
+    db.set_proposal(pid, "rejected")
+    return hydrate(db.get_proposal(pid))
+
+
+@app.post("/api/proposals/apply-all")
+def apply_all_proposals(tasks: BackgroundTasks, action: str | None = None):
+    ids = db.proposal_ids("proposed", action or None)
+    tasks.add_task(build_mod.apply_ids, ids)
+    return {"started": True, "count": len(ids)}
+
+
+@app.post("/api/build")
+def run_build(tasks: BackgroundTasks, taken_after: str | None = None, taken_before: str | None = None):
+    tasks.add_task(build_mod.propose, taken_after or None, taken_before or None)
     return {"started": True}
 
 

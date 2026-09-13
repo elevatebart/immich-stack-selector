@@ -8,7 +8,7 @@ import numpy as np
 
 from .config import settings
 from .db import Database
-from .group import candidate_groups, format_pairs, similarity_clusters
+from .group import CLUSTERERS, candidate_groups, format_pairs, upload_order
 from .immich import Immich
 from .scoring.embed import Embedder
 from .sync import Scorer, ingest_stack
@@ -40,6 +40,7 @@ def propose(taken_after: str | None, taken_before: str | None) -> dict:
     db = Database(settings.db_path)
     embedder = Embedder(settings.embed_model)
     scorer = Scorer()
+    clusterer = CLUSTERERS[settings.cluster_mode]
     print("listing assets...", file=sys.stderr)
     assets = list(im.iter_assets(taken_after, taken_before))
     groups = candidate_groups(assets, settings.time_window_s, settings.location_radius_m)
@@ -52,7 +53,7 @@ def propose(taken_after: str | None, taken_before: str | None) -> dict:
             embs = embed_group(im, db, embedder, ids, pool)
             if embs is None:
                 continue
-            for idx, min_sim in similarity_clusters(embs, settings.sim_threshold, format_pairs(group)):
+            for idx, min_sim in clusterer(embs, settings.sim_threshold, format_pairs(group), upload_order(group)):
                 cluster = [ids[i] for i in idx]
                 _, scores = scorer.score_assets(im, db, cluster, pool)
                 primary = cluster[max(range(len(cluster)), key=scores.__getitem__)]
@@ -112,10 +113,13 @@ def apply_proposal(im: Immich, db: Database, scorer: Scorer, pid: int, pool: Thr
 
 
 def apply_all() -> int:
+    return apply_ids(Database(settings.db_path).proposal_ids())
+
+
+def apply_ids(ids: list[int]) -> int:
     im = Immich(settings.immich_url, settings.api_key, settings.cache_dir)
     db = Database(settings.db_path)
     scorer = Scorer()
-    ids = db.proposal_ids()
     with ThreadPoolExecutor(settings.workers) as pool:
         for n, pid in enumerate(ids, 1):
             apply_proposal(im, db, scorer, pid, pool)
