@@ -6,8 +6,6 @@ driven page to keep that frame and trash the rest.
 
 It talks to the public Immich API only. Runs as a single container on a NAS.
 
-![review primaries](docs/review.png)
-
 ## What it does
 
 Three passes, each one optional on its own:
