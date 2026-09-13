@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import httpx
@@ -33,11 +34,25 @@ class Immich:
         if taken_before:
             body["takenBefore"] = taken_before if "T" in taken_before else f"{taken_before}T00:00:00.000Z"
         while body["page"]:
-            r = self.c.post("/search/metadata", json=body)
-            r.raise_for_status()
+            r = self._post_retry("/search/metadata", body)
             page = r.json()["assets"]
             yield from page["items"]
-            body["page"] = page.get("nextPage")
+            nxt = page.get("nextPage")
+            body["page"] = int(nxt) if nxt else None
+
+    def _post_retry(self, path: str, body: dict, tries: int = 4) -> httpx.Response:
+        for n in range(tries):
+            try:
+                r = self.c.post(path, json=body)
+                if r.status_code < 500:
+                    if r.is_error:
+                        raise RuntimeError(f"{path} {r.status_code}: {r.text[:300]} body={body}")
+                    return r
+            except httpx.TransportError:
+                if n == tries - 1:
+                    raise
+            time.sleep(2 ** n)
+        raise RuntimeError(f"{path} kept failing: {r.status_code} {r.text[:300]}")
 
     def create_stack(self, asset_ids: list[str]) -> dict:
         r = self.c.post("/stacks", json={"assetIds": asset_ids})
