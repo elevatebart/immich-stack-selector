@@ -13,8 +13,10 @@ services:
       LOCATION_RADIUS_M: ${LOCATION_RADIUS_M:-30}
       SIM_THRESHOLD: ${SIM_THRESHOLD:-0.85}
       CLUSTER_MODE: ${CLUSTER_MODE:-chain}
-      # re-score stacks on this cadence; 0 disables (use the sync button or the API instead)
+      # timers in minutes, 0 disables. sync re-scores; build stacks new photos (create only)
       SYNC_EVERY_MIN: ${SYNC_EVERY_MIN:-360}
+      BUILD_EVERY_MIN: ${BUILD_EVERY_MIN:-60}
+      BUILD_WINDOW_DAYS: ${BUILD_WINDOW_DAYS:-14}
       WORKERS: 4
     volumes:
       - ./data:/data

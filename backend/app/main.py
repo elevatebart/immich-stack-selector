@@ -171,23 +171,28 @@ def run_build(tasks: BackgroundTasks, taken_after: str | None = None, taken_befo
     return {"started": True}
 
 
-@app.on_event("startup")
-def periodic_sync():
-    """Re-score stacks every SYNC_EVERY_MIN minutes when deployed as a long-running container."""
-    if settings.sync_every_min <= 0:
-        return
+def _every(minutes: int, name: str, fn) -> None:
     import threading
     import time
 
     def loop():
         while True:
-            time.sleep(settings.sync_every_min * 60)
+            time.sleep(minutes * 60)
             try:
-                sync_mod.sync(False, set())
+                print(f"periodic {name}: {fn()}")
             except Exception as e:  # keep the server alive, log and retry next tick
-                print(f"periodic sync failed: {e}")
+                print(f"periodic {name} failed: {e}")
 
-    threading.Thread(target=loop, daemon=True).start()
+    threading.Thread(target=loop, daemon=True, name=name).start()
+
+
+@app.on_event("startup")
+def schedule():
+    """Long-running container mode: re-score stacks and stack new photos on timers."""
+    if settings.sync_every_min > 0:
+        _every(settings.sync_every_min, "sync", lambda: sync_mod.sync(False, set()))
+    if settings.build_every_min > 0:
+        _every(settings.build_every_min, "build", lambda: build_mod.periodic(settings.build_window_days))
 
 
 dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

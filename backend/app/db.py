@@ -170,11 +170,13 @@ class Database:
             row = c.execute("SELECT * FROM proposals WHERE id=?", (pid,)).fetchone()
             return self._proposal(row) if row else None
 
-    def proposal_ids(self, status: str = "proposed", action: str | None = None) -> list[int]:
+    def proposal_ids(self, status: str = "proposed", action: str | None = None, only_new: bool = False) -> list[int]:
         q, params = "SELECT id FROM proposals WHERE status=?", [status]
         if action:
             q += " AND action=?"
             params.append(action)
+        if only_new:
+            q += " AND replaces='[]'"
         with self.conn() as c:
             return [r[0] for r in c.execute(q + " ORDER BY id", params)]
 

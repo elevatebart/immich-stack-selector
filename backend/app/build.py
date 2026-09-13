@@ -156,6 +156,15 @@ def apply_ids(ids: list[int]) -> int:
     return len(ids) - failed
 
 
+def periodic(window_days: int) -> int:
+    """Scan recent photos and stack the ones nobody has stacked yet. Replace and dissolve stay manual."""
+    from datetime import datetime, timedelta, timezone
+
+    since = (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    propose(since, None)
+    return apply_ids(Database(settings.db_path).proposal_ids("proposed", "create", only_new=True))
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--apply", action="store_true", help="apply every proposal still in 'proposed' state")

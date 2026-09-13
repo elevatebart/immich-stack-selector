@@ -1,72 +1,92 @@
 # immich-stack-selector
 
-Scores every frame of your Immich stacks, sets the best one as the stack
-primary, and gives you a keyboard-driven UI to confirm the pick and trash
-the rest. Every review you make becomes a training pair for the ranker.
+Builds photo stacks in [Immich](https://immich.app) from timing, GPS and
+visual similarity, puts the sharpest frame on top, and gives you a keyboard
+driven page to keep that frame and trash the rest.
 
-Works on top of stacks created by [immich-stack](https://github.com/majorfi/immich-stack)
-or by hand. Only talks to the public Immich API.
+It talks to the public Immich API only. Runs as a single container on a NAS.
 
-### How scoring works
+![review primaries](docs/review.png)
 
-1. `python -m app.sync` pulls all stacks, classifies each one:
-   `burst` (same extension, frames within `TIME_WINDOW_S` of each other),
-   `format` (mixed extensions, typically RAW+JPG), `loose`.
-2. For each frame it downloads the `preview` thumbnail and computes
-   sharpness (Laplacian variance), face sharpness on Immich's own face boxes,
-   clipping and exposure. With `USE_AESTHETIC=1` it adds the LAION aesthetic
-   score (CLIP ViT-L/14). Features are cached in SQLite.
-3. Features are z-scored within the stack and combined with a weight vector.
-   Default weights are hand-set. `python -m app.train` refits them by
-   logistic regression on your review decisions (chosen vs rejected sibling).
-4. `--apply` writes the suggested primary to Immich for unreviewed burst
-   stacks. Without it, suggestions only show up in the UI.
+## What it does
 
-Trashing is refused for `format` stacks so you never lose a RAW. Trash uses
-Immich's soft delete, `undo` restores from trash and resets the primary.
+Three passes, each one optional on its own:
 
-### Stack builder (work in progress)
+1. **Build stacks.** Every image in the library is walked in capture order.
+   Consecutive shots within `TIME_WINDOW_S` seconds (and, when both carry
+   GPS, within `LOCATION_RADIUS_M` metres) form a candidate group. Frames in
+   a group are embedded with CLIP and chained in upload order: a frame joins
+   the most recent chain whose last frame it resembles (`SIM_THRESHOLD`
+   cosine). Each chain of two or more frames becomes a stack. RAW+JPG pairs
+   with the same file stem always land together. Several phones shooting the
+   same event interleave without breaking chains.
+2. **Pick the primary.** Every frame is scored on sharpness, face sharpness
+   (using Immich's own face boxes), highlight and shadow clipping and
+   exposure. Scores are standardised inside the stack and combined; the best
+   frame is created as the stack primary, so Immich shows it in the
+   timeline. Optional: the LAION aesthetic predictor on CLIP ViT-L/14.
+3. **Review.** A web page shows one stack at a time with the pick
+   preselected. `t` keeps it and trashes the siblings (Immich soft delete,
+   `u` restores), a digit picks another frame first. Every decision is kept
+   as a training pair; `python -m app.train` refits the ranker weights on
+   them once you have a hundred or so.
 
-`python -m app.build` replaces immich-stack's grouping. It lists every image
-via `POST /search/metadata`, chains consecutive shots into candidate groups
-when they are within `TIME_WINDOW_S` and, when both carry GPS, within
-`LOCATION_RADIUS_M`, embeds the previews with CLIP (`EMBED_MODEL`) and keeps
-connected components whose pairwise cosine is at least `SIM_THRESHOLD`.
-RAW+JPG pairs with the same stem are always linked. Each cluster's primary
-is the frame the ranker scores highest.
+Proposed stack changes are staged locally and diffed against what Immich
+has. You see `keep`, `create` and `dissolve` cards with thumbnails, the
+minimum pairwise similarity and the reason a stack fails, then apply them
+one by one or in bulk. Nothing reaches Immich before you say so, except in
+the container's timer mode, which only ever creates stacks for photos that
+are not stacked yet.
 
-Proposals are diffed against the stacks Immich has today and stored locally
-as `keep`, `create` (replacing overlapping stacks) or `dissolve`. Nothing is
-written until `--apply`. `--taken-after` / `--taken-before` limit the scan;
-existing stacks outside the window are left alone.
-
-```bash
-.venv/bin/python -m app.build --taken-after 2026-08-01   # dry run, fills the proposals table
-.venv/bin/python -m app.build --taken-after 2026-08-01 --apply
-```
-
-Known gap: clusters are single-linkage, so a chain A~B~C can pull in an A/C
-pair well below the threshold (the dry run reported one 9-frame chain with a
-min pairwise sim of 0.82 against a 0.90 threshold). The `min_sim` column
-exposes this; a UI to review proposals before applying is not built yet.
-
-### Run
+## Deploy on a NAS
 
 ```bash
-cp .env.example .env   # set IMMICH_URL and IMMICH_API_KEY
-cd backend && python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python -m app.sync            # score, no writes to Immich
-.venv/bin/python -m app.sync --apply    # also set primaries on burst stacks
-.venv/bin/uvicorn app.main:app --reload --port 8000
-cd ../frontend && npm install && npm run dev   # http://localhost:5173
+mkdir immich-stack-selector && cd immich-stack-selector
+curl -LO https://raw.githubusercontent.com/elevatebart/immich-stack-selector/main/docker-compose.yml
+curl -Lo .env https://raw.githubusercontent.com/elevatebart/immich-stack-selector/main/.env.example
+# edit .env: IMMICH_URL, IMMICH_API_KEY
+docker compose up -d
 ```
 
-Production: `npm run build` in `frontend/`, the FastAPI app serves `dist/` at `/`.
+Open `http://nas:8000`. The `data/` folder next to the compose file keeps the
+SQLite database, the thumbnail cache and the CLIP weights, so the first
+build downloads the model once.
 
-Optional aesthetic model: `.venv/bin/pip install -e '.[aesthetic]'` and `USE_AESTHETIC=1`.
-First run downloads CLIP ViT-L/14 (~1.7 GB) and the predictor head.
+The API key needs these permissions: `stack.read`, `stack.create`,
+`stack.update`, `stack.delete`, `asset.read`, `asset.view`, `face.read`,
+and `asset.delete` for the trash and restore actions.
 
-### Review UI
+Timers, all in minutes and all disabled with `0`:
+
+| variable | default | effect |
+| --- | --- | --- |
+| `SYNC_EVERY_MIN` | 360 | re-score every stack, refresh suggestions |
+| `BUILD_EVERY_MIN` | 60 | stack unstacked photos taken in the last `BUILD_WINDOW_DAYS` |
+| `BUILD_WINDOW_DAYS` | 14 | how far back the periodic build looks |
+
+Images are published to `ghcr.io/elevatebart/immich-stack-selector` for
+`linux/amd64` and `linux/arm64` on every push to `main`. Uncomment
+`build: .` in the compose file to build on the NAS instead.
+
+## First run on an existing library
+
+If you already have stacks (from immich-stack or by hand) the builder will
+diff against them. On a fresh library or after unstacking everything, every
+proposal is a `create`. From the proposals tab:
+
+1. Click **rebuild proposals** with the date empty. The whole library is
+   scanned; only the first run is slow because it embeds every candidate.
+2. Cards are sorted worst first. Long chains with a low minimum similarity
+   are the ones to eyeball: reject the ones that merged different scenes.
+3. **apply all shown**, optionally filtered by action.
+4. Switch to **review primaries** and work through the queue with the keys
+   below.
+
+Stacks whose consecutive frames are more than two windows apart are labelled
+`loose`; the trash button is disabled on them as a guard. `format` stacks
+(RAW+JPG) can never be trashed from this tool.
+
+## Keys on the review page
 
 | key | action |
 | --- | --- |
@@ -74,34 +94,48 @@ First run downloads CLIP ViT-L/14 (~1.7 GB) and the predictor head.
 | `enter` | set selected frame as primary |
 | `t` | set primary and trash the other frames (burst stacks only) |
 | `s` | skip |
-| `u` | undo last decision (restores trashed frames) |
+| `u` | undo last decision, restores trashed frames |
 
-### Caveats
+## Tuning
 
-- immich-stack in `RUN_MODE=cron` with `REPLACE_STACKS` may rebuild stacks
-  and re-apply its own parent rule, overwriting your primary. Run it once,
-  or chain `python -m app.sync --apply` after it.
-- `sync` marks stacks that disappeared from Immich as `gone` rather than
-  deleting local rows, so decisions stay available for training.
-- The ranker needs on the order of 100 human decisions before it beats the
-  hand-set weights. Retrain with `python -m app.train`, then rescore with
-  `python -m app.sync`.
+| variable | default | notes |
+| --- | --- | --- |
+| `TIME_WINDOW_S` | 120 | max gap between consecutive shots in a candidate group |
+| `LOCATION_RADIUS_M` | 30 | phone GPS jitters by 10 to 30 m, keep this above 10 |
+| `SIM_THRESHOLD` | 0.85 | 0.90 splits reframed shots of the same scene, 0.80 starts merging different subjects |
+| `CLUSTER_MODE` | `chain` | `complete` requires every frame to match every other, tighter stacks, no cross device chains |
+| `EMBED_MODEL` | `ViT-B-32/openai` | any open_clip `arch/pretrained` pair |
 
-### Docker (NAS deployment)
+Embeddings and features are cached, so changing thresholds and rebuilding
+takes a couple of minutes on a 20k photo library.
 
-The image bundles the UI, the API and CPU-only torch. Model weights, the
-SQLite database and the thumbnail cache live on the `/data` volume, so the
-first `build` downloads CLIP once and keeps it.
+## Local development
 
 ```bash
-cp .env.example .env            # fill IMMICH_URL and IMMICH_API_KEY
-docker compose up -d            # pulls ghcr.io/elevatebart/immich-stack-selector
-docker compose exec stack-selector python -m app.build --app-dir backend   # propose stacks
+cp .env.example .env
+cd backend && python3 -m venv .venv && .venv/bin/pip install -e '.[aesthetic]'
+.venv/bin/python -m app.build --taken-after 2026-08-01    # dry run, fills proposals
+.venv/bin/python -m app.sync                              # score existing stacks
+.venv/bin/uvicorn app.main:app --reload --port 8000 --app-dir .
+cd ../frontend && npm install && npm run dev              # http://localhost:5173, proxies /api
 ```
 
-`SYNC_EVERY_MIN` re-scores stacks on a timer (default six hours in the
-compose file). The builder and the bulk apply stay manual: run them from
-the proposals tab or with `docker compose exec stack-selector python -c
-"from app.build import propose; propose(None, None)"`. The GitHub workflow
-publishes `linux/amd64` and `linux/arm64` images on every push to `main`;
-to build on the NAS itself, uncomment `build: .` in the compose file.
+`npm run build` writes `frontend/dist`, which the API serves at `/`.
+
+Layout: `backend/app` holds the FastAPI app (`main.py`), the Immich client,
+the SQLite layer, the stack builder (`build.py`, `group.py`) and the scorer
+(`scoring/`). `frontend/src` is a small Vue 3 app with two views.
+
+## Caveats
+
+- Chain mode can drift: a long burst where each frame resembles the previous
+  one can end with frames that no longer resemble the first. The card shows
+  the minimum pairwise similarity for exactly this reason.
+- If immich-stack still runs in cron mode with `REPLACE_STACKS`, it will
+  rebuild stacks with its own parent rule and undo the primaries. Stop it.
+- CLIP measures semantic similarity, not pixel identity. Two different
+  portraits of the same person at the same table can score above 0.85.
+
+## License
+
+MIT

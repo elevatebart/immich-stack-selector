@@ -26,6 +26,8 @@ class Settings:
     embed_model: str = os.environ.get("EMBED_MODEL", "ViT-B-32/openai")
     use_aesthetic: bool = os.environ.get("USE_AESTHETIC", "0") == "1"
     sync_every_min: int = int(os.environ.get("SYNC_EVERY_MIN", "0"))
+    build_every_min: int = int(os.environ.get("BUILD_EVERY_MIN", "0"))
+    build_window_days: int = int(os.environ.get("BUILD_WINDOW_DAYS", "14"))
     workers: int = int(os.environ.get("WORKERS", "8"))
 
 
