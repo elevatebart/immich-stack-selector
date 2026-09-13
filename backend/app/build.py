@@ -3,6 +3,8 @@ import argparse
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+from pathlib import Path
+
 import httpx
 import numpy as np
 
@@ -57,7 +59,7 @@ def dissolve_reason(db: Database, model: str, assets: list[dict]) -> str:
 def propose(taken_after: str | None, taken_before: str | None) -> dict:
     im = Immich(settings.immich_url, settings.api_key, settings.cache_dir)
     db = Database(settings.db_path)
-    embedder = Embedder(settings.embed_model)
+    embedder = Embedder(settings.embed_model, cache_dir=str(Path(settings.cache_dir) / 'models'))
     scorer = Scorer()
     clusterer = CLUSTERERS[settings.cluster_mode]
     print("listing assets...", file=sys.stderr)
