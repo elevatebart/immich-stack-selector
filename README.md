@@ -51,7 +51,10 @@ docker compose run --rm job build --periodic 14   # first run downloads CLIP int
 ```
 
 The `data/` folder next to the compose file keeps the SQLite database, the
-thumbnail cache and the model weights between runs.
+thumbnail cache and the model weights between runs. Budget a few GB for it.
+The first `sync` on an existing library downloads a preview of every stacked
+frame and scores it, which can take an hour on a NAS CPU; later runs only
+touch new frames.
 
 Scheduled task (Synology Task Scheduler, user-defined script as root, or
 cron), nightly for example:
