@@ -155,6 +155,11 @@ the SQLite layer, the stack builder (`build.py`, `group.py`) and the scorer
 - CLIP measures semantic similarity, not pixel identity. Two different
   portraits of the same person at the same table can score above 0.85.
 
+## Internals
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the models, the clustering rules
+and the scoring formula.
+
 ## License
 
 MIT
