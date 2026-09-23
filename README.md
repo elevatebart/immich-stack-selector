@@ -64,9 +64,15 @@ cd /volume1/docker/immich-stack-selector && docker compose run --rm job build --
 ```
 
 `build --periodic 14` scans photos taken in the last 14 days and creates
-stacks for the ones not stacked yet, best frame on top. It never dissolves
-or replaces a stack. `sync` re-scores existing stacks so the review page has
-fresh suggestions.
+stacks for the ones not stacked yet, best frame on top. `--periodic 2`
+covers the last 48 hours; the window is by capture date, so widen it if
+phones back up late. Reruns over the same photos are cheap: previews,
+CLIP vectors and scores are cached per asset.
+
+It never dissolves or replaces a stack. If you unstack one it created (in
+Immich or anywhere else), later runs leave those frames apart; a new photo
+can still join one of them. `sync` re-scores existing stacks so the review
+page has fresh suggestions.
 
 Review page, when you have time to go through stacks:
 
