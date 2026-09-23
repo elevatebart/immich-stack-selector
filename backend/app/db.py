@@ -180,6 +180,18 @@ class Database:
         with self.conn() as c:
             return [r[0] for r in c.execute(q + " ORDER BY id", params)]
 
+    def created_stacks(self) -> dict[str, set[str]]:
+        """Stacks this app created, by Immich id, with their asset ids."""
+        with self.conn() as c:
+            q = "SELECT created_stack_id, asset_ids FROM proposals WHERE status='applied' AND created_stack_id IS NOT NULL"
+            return {r[0]: set(json.loads(r[1])) for r in c.execute(q)}
+
+    def deleted_by_app(self) -> set[str]:
+        with self.conn() as c:
+            rows = c.execute("SELECT action, existing_stack_id, replaces FROM proposals WHERE status='applied'").fetchall()
+        out = {r["existing_stack_id"] for r in rows if r["action"] == "dissolve"}
+        return out | {sid for r in rows for sid in json.loads(r["replaces"])}
+
     def asset_names(self, asset_ids: list[str]) -> dict[str, str]:
         if not asset_ids:
             return {}
