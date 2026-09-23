@@ -28,6 +28,9 @@ class Settings:
     sync_every_min: int = int(os.environ.get("SYNC_EVERY_MIN", "0"))
     build_every_min: int = int(os.environ.get("BUILD_EVERY_MIN", "0"))
     build_window_days: int = int(os.environ.get("BUILD_WINDOW_DAYS", "14"))
+    face_split: bool = os.environ.get("FACE_SPLIT", "1") == "1"
+    face_min_size: float = float(os.environ.get("FACE_MIN_SIZE", "0.08"))
+    face_threshold: float = float(os.environ.get("FACE_THRESHOLD", "0.25"))
     workers: int = int(os.environ.get("WORKERS", "8"))
 
 

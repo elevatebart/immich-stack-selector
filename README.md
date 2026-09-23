@@ -17,7 +17,11 @@ Three passes, each one optional on its own:
    the most recent chain whose last frame it resembles (`SIM_THRESHOLD`
    cosine). Each chain of two or more frames becomes a stack. RAW+JPG pairs
    with the same file stem always land together. Several phones shooting the
-   same event interleave without breaking chains.
+   same event interleave without breaking chains. Chains are then split
+   where the main faces belong to different people (ArcFace on Immich's face
+   boxes), so a portrait series against one backdrop does not become one
+   stack. Only large, frontal faces count, and a frame leaves a stack only
+   when it disagrees with most of it.
 2. **Pick the primary.** Every frame is scored on sharpness, face sharpness
    (using Immich's own face boxes), highlight and shadow clipping and
    exposure. Scores are standardised inside the stack and combined; the best
@@ -47,7 +51,7 @@ mkdir -p /volume1/docker/immich-stack-selector && cd /volume1/docker/immich-stac
 curl -LO https://raw.githubusercontent.com/elevatebart/immich-stack-selector/main/docker-compose.yml
 curl -Lo .env https://raw.githubusercontent.com/elevatebart/immich-stack-selector/main/.env.example
 # edit .env: IMMICH_URL, IMMICH_API_KEY
-docker compose run --rm job build --periodic 14   # first run downloads CLIP into ./data
+docker compose run --rm job build --periodic 14   # first run downloads CLIP and ArcFace into ./data
 ```
 
 The `data/` folder next to the compose file keeps the SQLite database, the
@@ -67,7 +71,7 @@ cd /volume1/docker/immich-stack-selector && docker compose run --rm job build --
 stacks for the ones not stacked yet, best frame on top. `--periodic 2`
 covers the last 48 hours; the window is by capture date, so widen it if
 phones back up late. Reruns over the same photos are cheap: previews,
-CLIP vectors and scores are cached per asset.
+CLIP vectors, face vectors and scores are cached per asset.
 
 It never dissolves or replaces a stack. If you unstack one it created (in
 Immich or anywhere else), later runs leave those frames apart; a new photo
@@ -130,6 +134,9 @@ Stacks whose consecutive frames are more than two windows apart are labelled
 | `SIM_THRESHOLD` | 0.85 | 0.90 splits reframed shots of the same scene, 0.80 starts merging different subjects |
 | `CLUSTER_MODE` | `chain` | `complete` requires every frame to match every other, tighter stacks, no cross device chains |
 | `EMBED_MODEL` | `ViT-B-32/openai` | any open_clip `arch/pretrained` pair |
+| `FACE_SPLIT` | 1 | split clusters whose frames show different people (ArcFace, 190 MB download, non-commercial licence) |
+| `FACE_MIN_SIZE` | 0.08 | face box side / short image side for a face to count as the subject |
+| `FACE_THRESHOLD` | 0.25 | ArcFace cosine under which two faces are different people; lower splits less |
 
 Embeddings and features are cached, so changing thresholds and rebuilding
 takes a couple of minutes on a 20k photo library.
@@ -158,8 +165,13 @@ the SQLite layer, the stack builder (`build.py`, `group.py`) and the scorer
   the minimum pairwise similarity for exactly this reason.
 - If immich-stack still runs in cron mode with `REPLACE_STACKS`, it will
   rebuild stacks with its own parent rule and undo the primaries. Stop it.
-- CLIP measures semantic similarity, not pixel identity. Two different
-  portraits of the same person at the same table can score above 0.85.
+- CLIP measures semantic similarity, not pixel identity. Different group
+  shots of one family in one garden score above 0.85 whoever is in them;
+  the face split cannot tell those apart because every face appears in
+  several frames. `CLUSTER_MODE=complete` does not help there either.
+- The face split skips people looking away from the camera, so a series
+  of profile portraits still stacks. When it errs, it leaves one frame out
+  of a stack rather than merging different people.
 
 ## Internals
 

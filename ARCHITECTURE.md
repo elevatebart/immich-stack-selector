@@ -73,6 +73,34 @@ every member. No drift, tighter stacks, more splits when devices interleave.
 After either pass, forced RAW+JPG pairs that landed in different clusters
 are merged. Clusters of one are dropped.
 
+### Identity split (`group.py: split_by_identity`, `scoring/faces.py`)
+
+CLIP embeds the whole frame, so portraits of different people against one
+backdrop clear the threshold. Each cluster is re-split on who is in it.
+Immich's face boxes are re-detected with SCRFD (buffalo_l `det_10g`) inside a
+2x crop to get five landmarks, aligned to the ArcFace template and embedded
+with `w600k_r50`, the same models Immich runs. Vectors are cached in
+`face_embeddings`; an asset with no Immich faces yet is retried next run.
+
+A face is a main subject when its box side is at least `FACE_MIN_SIZE` of
+the short image side, SCRFD scores it 0.6 or more and it is frontal: the
+nose sits within 0.25 eye distances of the eye midpoint. Two frames are
+different subjects when both have main faces and no main face of either
+matches any face of the other at `FACE_THRESHOLD` cosine. Comparing main to
+all faces keeps a panning group shot together. A shared Immich person id
+short-circuits to "same"; disjoint ids prove nothing, since Immich files one
+person under two ids often enough (glasses, goggles).
+
+Frames are assigned in cluster order to the first part where they conflict
+with at most half of the comparable members, otherwise they open a new part.
+One blurry or dark face therefore cannot pull a frame out of a burst, but a
+two-frame cluster splits on a single conflict. Parts of one are dropped.
+
+Calibration on the author's library, 488 clusters over 2024 to 2026: 2
+correct splits (different people against one backdrop), 1 frame wrongly
+left out of a stack. Rules tried and dropped: a single conflict splits
+(3 of 5 splits wrong), disjoint person ids split (15 of 410 real stacks).
+
 ### Proposals (`build.py: propose`)
 
 Each cluster is scored by the ranker (section 2) so the primary is known
@@ -181,6 +209,7 @@ back. Decisions are the training set of section 2.
 | `stacks`, `assets` | mirror of Immich stacks with kind, status, score and suggestion |
 | `feature_cache` | technical features per asset, survives stack rebuilds |
 | `embeddings` | CLIP vectors per asset and model |
+| `face_embeddings` | ArcFace vectors, detector score, size and person id per face |
 | `proposals` | builder output with action, status, `min_sim`, `reason` |
 | `decisions` | human and automatic primary changes, trashed ids for undo |
 
@@ -191,10 +220,12 @@ trained weights; everything else is rebuilt from Immich.
 ## Known limits
 
 - Chain drift, discussed above. Watch `min_sim` under 0.8.
-- CLIP similarity is semantic. Two different portraits at the same table
-  can clear 0.85; a burst with a large exposure change can fall under it.
-  DINOv2 would track structure more closely and is the natural next
-  embedder to try.
+- CLIP similarity is semantic. A burst with a large exposure change can fall
+  under the threshold. Different portraits at the same table are caught by
+  the identity split only when faces are large enough; a series of wide
+  shots or people seen from behind still stacks.
+- The buffalo_l weights are under the InsightFace licence, non-commercial
+  use only. `FACE_SPLIT=0` skips the download.
 - Sharpness is measured on a 1024 px preview. Micro blur that only shows at
   100 % is invisible to it.
 - Face boxes come from Immich's own detector. Frames Immich has not
