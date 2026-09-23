@@ -10,7 +10,7 @@ import numpy as np
 
 from .config import settings
 from .db import Database
-from .group import CLUSTERERS, candidate_groups, format_pairs, gps, haversine_m, ts, upload_order
+from .group import CLUSTERERS, candidate_groups, format_pairs, gps, haversine_m, split_by_identity, ts, upload_order
 from .immich import Immich
 from .scoring.embed import Embedder
 from .sync import Scorer, ingest_stack
@@ -35,6 +35,42 @@ def embed_group(im: Immich, db: Database, embedder: Embedder, ids: list[str], po
     if len(cached) < 2:
         return None
     return np.vstack([np.frombuffer(cached[i], dtype=np.float32) if i in cached else np.zeros(512, np.float32) for i in ids])
+
+
+def face_records(im: Immich, db: Database, fe, ids: list[str], pool: ThreadPoolExecutor) -> dict[str, list[dict]]:
+    """Identity vector, detector score, relative size and Immich person per face, cached per asset."""
+    cached = db.cached_faces(ids, fe.spec)
+    missing = [i for i in ids if i not in cached]
+
+    def fetch(aid: str) -> tuple[list[dict], bytes | None]:
+        boxes = im.faces(aid)
+        try:
+            return boxes, im.thumbnail(aid, "preview") if boxes else None
+        except httpx.HTTPStatusError:
+            return [], None
+
+    fresh = {}
+    for aid, (boxes, data) in zip(missing, pool.map(fetch, missing)):
+        if not boxes or data is None:
+            continue  # Immich may not have run face detection yet, look again next run
+        meta, vecs = [], []
+        for f, hit in zip(boxes, fe.embed(data, boxes)):
+            if hit is None:
+                continue
+            side = max(f["boundingBoxX2"] - f["boundingBoxX1"], f["boundingBoxY2"] - f["boundingBoxY1"])
+            meta.append({"det": hit[1], "yaw": hit[2], "size": side / min(f["imageWidth"], f["imageHeight"]),
+                         "person": (f.get("person") or {}).get("id")})
+            vecs.append(hit[0])
+        fresh[aid] = (meta, np.asarray(vecs, np.float32).tobytes())
+    if fresh:
+        db.put_faces(fe.spec, fresh)
+        cached.update(fresh)
+    out = {}
+    for aid in ids:
+        meta, blob = cached.get(aid, ([], b""))
+        vecs = np.frombuffer(blob, dtype=np.float32).reshape(-1, 512)
+        out[aid] = [{**m, "vec": v} for m, v in zip(meta, vecs)]
+    return out
 
 
 def dissolve_reason(db: Database, model: str, assets: list[dict]) -> str:
@@ -62,12 +98,17 @@ def propose(taken_after: str | None, taken_before: str | None) -> dict:
     embedder = Embedder(settings.embed_model, cache_dir=str(Path(settings.cache_dir) / 'models'))
     scorer = Scorer()
     clusterer = CLUSTERERS[settings.cluster_mode]
+    faces = None
+    if settings.face_split:
+        from .scoring.faces import FaceEmbedder
+
+        faces = FaceEmbedder(str(Path(settings.cache_dir) / "models"))
     print("listing assets...", file=sys.stderr)
     assets = list(im.iter_assets(taken_after, taken_before))
     groups = candidate_groups(assets, settings.time_window_s, settings.location_radius_m)
     print(f"{len(assets)} assets, {len(groups)} candidate groups ({sum(map(len, groups))} assets)", file=sys.stderr)
 
-    proposals, sims = [], []
+    proposals, sims, face_splits = [], [], 0
     with ThreadPoolExecutor(settings.workers) as pool:
         for gi, group in enumerate(groups, 1):
             ids = [a["id"] for a in group]
@@ -75,11 +116,18 @@ def propose(taken_after: str | None, taken_before: str | None) -> dict:
             if embs is None:
                 continue
             for idx, min_sim in clusterer(embs, settings.sim_threshold, format_pairs(group), upload_order(group)):
-                cluster = [ids[i] for i in idx]
-                _, scores = scorer.score_assets(im, db, cluster, pool)
-                primary = cluster[max(range(len(cluster)), key=scores.__getitem__)]
-                proposals.append({"asset_ids": cluster, "primary_asset_id": primary, "min_sim": min_sim})
-                sims.append(min_sim)
+                parts = [idx]
+                if faces is not None:
+                    recs = face_records(im, db, faces, [ids[i] for i in idx], pool)
+                    parts = split_by_identity(idx, {i: recs[ids[i]] for i in idx}, settings.face_min_size, settings.face_threshold)
+                    face_splits += parts != [idx]
+                for part in parts:
+                    sim = min_sim if part == idx else float((embs[part] @ embs[part].T).min())
+                    cluster = [ids[i] for i in part]
+                    _, scores = scorer.score_assets(im, db, cluster, pool)
+                    primary = cluster[max(range(len(cluster)), key=scores.__getitem__)]
+                    proposals.append({"asset_ids": cluster, "primary_asset_id": primary, "min_sim": sim})
+                    sims.append(sim)
             if gi % 200 == 0:
                 print(f"{gi}/{len(groups)} groups, {len(proposals)} proposed stacks", file=sys.stderr)
 
@@ -111,6 +159,8 @@ def propose(taken_after: str | None, taken_before: str | None) -> dict:
     if sims:
         q = np.percentile(sims, [10, 50, 90])
         print(f"min-sim percentiles p10 {q[0]:.3f} p50 {q[1]:.3f} p90 {q[2]:.3f}", file=sys.stderr)
+    if faces is not None:
+        print(f"{face_splits} clusters split by face identity", file=sys.stderr)
     print(f"proposals: {counts}")
     return counts
 

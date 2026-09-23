@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS embeddings (
   model TEXT NOT NULL,
   vec BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS face_embeddings (
+  asset_id TEXT PRIMARY KEY,
+  model TEXT NOT NULL,
+  meta TEXT NOT NULL,
+  vecs BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS proposals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
@@ -132,6 +138,20 @@ class Database:
             c.executemany(
                 "INSERT OR REPLACE INTO embeddings(asset_id, model, vec) VALUES(?,?,?)",
                 [(k, model, v) for k, v in vecs.items()],
+            )
+
+    def cached_faces(self, asset_ids: list[str], model: str) -> dict[str, tuple[list[dict], bytes]]:
+        if not asset_ids:
+            return {}
+        with self.conn() as c:
+            q = f"SELECT asset_id, meta, vecs FROM face_embeddings WHERE model=? AND asset_id IN ({','.join('?' * len(asset_ids))})"
+            return {r["asset_id"]: (json.loads(r["meta"]), r["vecs"]) for r in c.execute(q, [model, *asset_ids])}
+
+    def put_faces(self, model: str, faces: dict[str, tuple[list[dict], bytes]]) -> None:
+        with self.conn() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO face_embeddings(asset_id, model, meta, vecs) VALUES(?,?,?,?)",
+                [(k, model, json.dumps(m), v) for k, (m, v) in faces.items()],
             )
 
     # -- proposals --------------------------------------------------------

@@ -114,4 +114,38 @@ def complete_clusters(embs: np.ndarray, threshold: float, forced: list[tuple[int
     return _finish(sim, clusters, forced)
 
 
+MIN_DET_SCORE = 0.6
+MAX_YAW = 0.25
+
+
+def same_subject(a: list[dict], b: list[dict], min_size: float, threshold: float) -> bool | None:
+    """Whether the main faces (large, frontal) of either frame show up anywhere in the other; None if one has none."""
+    def main(fs):
+        return [f for f in fs if f["size"] >= min_size and f["det"] >= MIN_DET_SCORE and f["yaw"] <= MAX_YAW]
+    main_a, main_b = main(a), main(b)
+    if not main_a or not main_b:
+        return None
+    # Immich sometimes files one person twice, so a shared id proves identity but disjoint ids do not
+    ids_a, ids_b = {f["person"] for f in a if f["person"]}, {f["person"] for f in b if f["person"]}
+    if {f["person"] for f in main_a} & ids_b or {f["person"] for f in main_b} & ids_a:
+        return True
+    va, vb = np.stack([f["vec"] for f in a]), np.stack([f["vec"] for f in b])
+    ma, mb = np.stack([f["vec"] for f in main_a]), np.stack([f["vec"] for f in main_b])
+    return float((ma @ vb.T).max()) >= threshold or float((mb @ va.T).max()) >= threshold
+
+
+def split_by_identity(idx: list[int], faces: dict[int, list[dict]], min_size: float, threshold: float) -> list[list[int]]:
+    """Split a cluster where main subjects differ; a frame joins the first part it conflicts with less than half of."""
+    parts: list[list[int]] = []
+    for i in idx:
+        for part in parts:
+            votes = [v for v in (same_subject(faces[i], faces[j], min_size, threshold) for j in part) if v is not None]
+            if votes.count(False) * 2 <= len(votes):
+                part.append(i)
+                break
+        else:
+            parts.append([i])
+    return [p for p in parts if len(p) >= 2]
+
+
 CLUSTERERS = {"chain": chain_clusters, "complete": complete_clusters}
